@@ -11,9 +11,10 @@ Comparte la base de datos y el JWT con casino-backend. Permite:
 Prefijo de rutas: /api/bonos  (para que nginx pueda enrutar por prefijo).
 """
 import os
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -27,6 +28,9 @@ async def lifespan(app: FastAPI):
     esperar_bd()
     init_schema()
     yield
+
+
+INICIO = time.time()
 
 
 app = FastAPI(
@@ -53,10 +57,30 @@ class ReclamarRequest(BaseModel):
     monto_base: float = Field(default=0, ge=0, description="Base para bonos por porcentaje")
 
 
-# TODO (alumno): implementar las rutas de salud que usará Kubernetes:
-#   - liveness: ¿el proceso está vivo? (respuesta simple).
-#   - readiness: ¿está listo para recibir tráfico? Debe verificar la BD.
-# Luego configurar livenessProbe/readinessProbe en el Deployment de EKS.
+@app.get("/livez")
+def livez():
+    """
+    Liveness Probe: Verifica que el contenedor está ejecutándose.
+    No toca la base de datos.
+    """
+    uptime = round(time.time() - INICIO, 1)
+    return {"status": "alive", "uptime_segundos": uptime}
+
+
+@app.get("/readyz")
+def readyz(response: Response):
+    """
+    Readiness Probe: Verifica si la aplicación está lista para recibir tráfico.
+    Para VidalCasino, ESTO DEBE probar la conexión a PostgreSQL.
+    """
+    try:
+        with conexion() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        return {"status": "ready", "database": "connected"}
+    except Exception:
+        response.status_code = 503
+        return {"status": "not_ready", "database": "disconnected"}
 
 
 @app.get("/api/bonos")
